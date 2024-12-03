@@ -1,7 +1,7 @@
 from langchain_core.pydantic_v1 import BaseModel
 from tavily import TaviltyClient
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 import os 
 from typing import TypedDict, List
 import operator
@@ -24,10 +24,11 @@ class AgentState(TypedDict):
     
 # prompts
 
-USER_PROMPT = """I want to find 10 companies in Vancouver who will open up internship positions for 
-international students in the sectors of business, technology, and science"""
+USER_PROMPT = """I want to find 10 speakers in Vancouver who would be interested in presenting at an AI safety event being hosted at UBC."""
+
 KEYWORD_PROMPT = """You are a keyword specialist who is tasked with identifying the key ideas, concepts, 
 and words associated with the user given prompt: """ + USER_PROMPT
+
 KEYWORD_IMPORTANCE_PROMPT = """You are an expert at evaluating the importance of words in relation to a 
 given topic or prompt. Your task is to assign an importance value to each word in a list, based on how 
 strongly the word relates to the topic described in the given prompt. Use a scale of 1 to 5, where:
@@ -42,24 +43,44 @@ Here is the prompt: """ + USER_PROMPT + """. Here is the list of words:
 -------
 {content}"""
 
-ENRICHMENT_PROMPT = ""
+ENRICHMENT_PROMPT = """
+You are an advanced language model tasked with generating enrichment words to enhance the depth and variety of a provided prompt. 
+Enrichment words are closely related terms, synonyms, or associated phrases that can help make the input more nuanced, diverse, and expressive.
+
+Instructions:
+
+You will be provided with:
+
+A main prompt to guide the context.
+A list of keywords with their relative importance on a scale from 1 (low) to 5 (high).
+For each keyword, generate a list of 5-7 enrichment words or phrases that:
+
+Reflect the keyword's core meaning or associations.
+Respect its relative importance (e.g., prioritize highly important keywords with broader or more nuanced enrichment words).
+Stay relevant to the main prompt.
+Return the results in a structured format."""
 ENRICHMENT_IMPORTANCE_PROMPT = ""
-QUERY_PROMPT = ""
+QUERY_PROMPT = """Using the extracted keywords, enriched keywords, and their importance, generate a search 
+query. The query should focus on finding 10 speakers in Vancouver who are likely to open up internship 
+positions for international students in business, technology, and science.
+Keywords: {keywords}
+Enriched Keywords: {enrichment}"""
 QUALITY_PROMPT = ""
 MISSING_INFO_PROMPT = ""
 
 # set up tavily
 tavily = TaviltyClient(api_key = os.environ["TAVILY_API_KEY"])
 
-# set up Gemini
-model = ChatGoogleGenerativeAI(model = "gemini-ultra", temperature = 0)
+# set up ChatGPT
+model = ChatOpenAI(model = "gpt-4o", temperature = 0)
         # temperature is currently at dummy value of 0
 
-class Queries(BaseModel):
+class Queries(BaseModel): #TODO update structure of responses for importance agent
     queries: List[str]
 
-# keyword node
-def keyword_node(state: AgentState):
+# agent implementation
+
+def keyword_agent(state: AgentState):
     messages = [SystemMessage(content=KEYWORD_PROMPT)]
     try:
         response = model.invoke(messages)
@@ -67,8 +88,6 @@ def keyword_node(state: AgentState):
     except Exception as e:
         return {"error": str(e), "keywords": []}
 
-
-#importance node
 def importance_agent(state: AgentState):  
     messages = [SystemMessage (content = KEYWORD_IMPORTANCE_PROMPT),
                 HumanMessage (content = state['keywords'])]
@@ -77,3 +96,23 @@ def importance_agent(state: AgentState):
         return {"key_importance": response.content}
     except Exception as e:
         return {"error": str(e), "key_importance": []}
+
+def enrichment_agent(state: AgentState):
+    messages = [
+        SystemMessage(content=ENRICHMENT_PROMPT.format(user_prompt=USER_PROMPT, keywords=", ".join(state.get("keywords", []))))
+    ]
+    try:
+        response = model.invoke(messages)
+        return {"enrichment": response.content.split(", ")}  # Assuming output is comma-separated
+    except Exception as e:
+        return {"error": str(e), "enrichment": []}
+
+def enrichment_importance_agent(state: AgentState):
+    messages = [
+        SystemMessage(content=ENRICHMENT_IMPORTANCE_PROMPT.format(content=", ".join(state.get("enrichment", []))))
+    ]
+    try:
+        response = model.invoke(messages)
+        return {"enrichment_importance": response.content}
+    except Exception as e:
+        return {"error": str(e), "enrichment_importance": []}
